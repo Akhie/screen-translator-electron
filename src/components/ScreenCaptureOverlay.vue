@@ -3,7 +3,6 @@ import { ref, computed, onMounted, nextTick } from "vue";
 import Tesseract from "tesseract.js";
 import { historyStore } from "../store/history";
 import { uiStore } from "../store/ui";
-//import { v4 as uuid } from "uuid";
 
 const enabled = ref(false);
 const selecting = ref(false);
@@ -12,66 +11,67 @@ const start = ref({ x: 0, y: 0 });
 const current = ref({ x: 0, y: 0 });
 
 const preview = ref(null);
-const webviewOffset = ref({ x: 0, y: 0 });
-
 const capturedRect = ref(null);
-const overlayText = ref(null);
 
 const lines = ref([]);
-const formattedText = ref(null);
 
-onMounted(() => {
-  const rect = document.body.getBoundingClientRect();
-  webviewOffset.value = {
-    x: rect.left,
-    y: rect.top
-  };
-});
-
+/* =========================
+   Dragging OCR text
+========================= */
 
 let offsetX = 0;
 let offsetY = 0;
 
 const dragMouseDown = (index, e) => {
-console.log("CALLED : ",e);
   const line = lines.value[index];
   line.dragging = true;
 
   offsetX = e.clientX - line.x;
   offsetY = e.clientY - line.y;
 
-  const dragMouseMove = (e) => {
+  const onMove = (e) => {
     if (!line.dragging) return;
     line.x = e.clientX - offsetX;
     line.y = e.clientY - offsetY;
   };
 
-  const dragMouseUp = () => {
+  const onUp = () => {
     line.dragging = false;
-    document.removeEventListener("mousemove", dragMouseMove);
-    document.removeEventListener("mouseup", dragMouseUp);
-    lines.value[index] = line;
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
   };
 
-  document.addEventListener("mousemove", dragMouseMove);
-  document.addEventListener("mouseup", dragMouseUp);
+  document.addEventListener("mousemove", onMove);
+  document.addEventListener("mouseup", onUp);
 };
 
-/* Start / Stop */
+/* =========================
+   Controls
+========================= */
 
-async function startSelection() {
+function startSelection() {
   enabled.value = true;
   selecting.value = false;
-  //await appWindow.setIgnoreCursorEvents(false);
 }
 
-async function stopSelection() {
+function stopSelection() {
   enabled.value = false;
   selecting.value = false;
-  //await appWindow.setIgnoreCursorEvents(true);
 }
 
-/* Mouse events (screen coords ONLY) */
+function refreshOverlay() {
+  enabled.value = false;
+  selecting.value = false;
+  start.value = { x: 0, y: 0 };
+  current.value = { x: 0, y: 0 };
+  capturedRect.value = null;
+  preview.value = null;
+  lines.value = [];
+}
+
+/* =========================
+   Mouse (SCREEN COORDS ONLY)
+========================= */
 
 function onMouseDown(e) {
   if (!enabled.value) return;
@@ -90,146 +90,94 @@ async function onMouseUp() {
   selecting.value = false;
 
   await nextTick();
-  const imageBlob = await showPreView();
-  const data = await extractTextFromImage(imageBlob);
-  console.log("DATA : ", data.text)
-  // send this data to backend for translation
+  const blob = await captureArea();
+  if (!blob) return;
+
+  const data = await extractText(blob);
+
   historyStore.addCapture({
-    id: "uuid()",
+    id: crypto.randomUUID(),
     timestamp: Date.now(),
     image: preview.value.src,
     lines: data
   });
-  console.log(historyStore.captures);
-  dataToRenderingData(data);
+  console.log("OCR TEXT : ", data.text);
+  const translated = await window.api.translate(data.text);
+
+  console.log("Translation:", translated);
+  addRenderLine(data);
 }
 
-async function extractTextFromImage(imageBlob) {
-  const result = await Tesseract.recognize(
-    imageBlob,
-    "kor",
-    {
-      logger: m => console.log(m) // progress logs
-    }
-  );
+/* =========================
+   OCR
+========================= */
 
+async function extractText(blob) {
+  const result = await Tesseract.recognize(blob, "eng+kor", {
+    logger: m => console.log(m)
+  });
   return result.data;
 }
 
-const dataToRenderingData = (data) => {
-  const renderData = {
+/* =========================
+   Rendering OCR
+========================= */
+
+function addRenderLine(data) {
+  lines.value.push({
     text: data.text,
     x: preview.value.x,
     y: preview.value.y,
-    h: preview.value.h,
     w: preview.value.w,
+    h: preview.value.h,
     dragging: false
-  }
-  lines.value = [...lines.value, renderData];
-  console.log("Lines.value : ", lines.value)
+  });
 }
 
-async function showPreView() {
-  // 🔥 DPI FIX (this is the key)
-  const dpr = window.devicePixelRatio || 1;
+/* =========================
+   Screen Capture (FIXED)
+========================= */
 
-  const logicalX = Math.min(start.value.x, current.value.x);
-  const logicalY = Math.min(start.value.y, current.value.y);
-  const logicalW = Math.abs(start.value.x - current.value.x);
-  const logicalH = Math.abs(start.value.y - current.value.y);
-
-  // Convert logical → physical pixels for Rust
-  const x = Math.round(logicalX * dpr);
-  const y = Math.round(logicalY * dpr);
-  const width = Math.round(logicalW * dpr);
-  const height = Math.round(logicalH * dpr);
-
-  if (width < 5 || height < 5) return;
-
-  try {
-// Call the Electron bridge
-  const bytes = await window.api.captureArea({ x, y, width, height });
-
-  // Display as an image
-  const blob = new Blob([bytes], { type: "image/png" });
-  const url = URL.createObjectURL(blob);
-
-
-    preview.value = {
-      src: url,
-      x: logicalX,
-      y: logicalY,
-      w: logicalW,
-      h: logicalH
-    };
-    capturedRect.value = { x, y, width, height };
-    return blob;
-  } catch (e) {
-    console.error("Capture failed:", e);
-  }
-}
-
-const textStyle = computed(() => {
-  if (!capturedRect.value) return {};
-
-  const rect = document.body.getBoundingClientRect();
-
-  return {
-    left:
-      capturedRect.value.x -
-      window.screenX -
-      rect.left +
-      "px",
-
-    top:
-      capturedRect.value.y -
-      window.screenY -
-      rect.top +
-      "px",
-
-    width: capturedRect.value.width + "px",
-    height: capturedRect.value.height + "px"
-  };
-});
-
-function refreshOverlay() {
-  enabled.value = false;
-  selecting.value = false;
-
-  start.value = { x: 0, y: 0 };
-  current.value = { x: 0, y: 0 };
-
-  capturedRect.value = null;
-  overlayText.value = "";
-  lines.value = [];
-
-  console.log("Overlay refreshed");
-}
-
-
-/* PERFECT box positioning */
-
-const selectionStyle = computed(() => {
-  const left =
-    Math.min(start.value.x, current.value.x) -
-    (window.screenX + webviewOffset.value.x);
-
-  const top =
-    Math.min(start.value.y, current.value.y) -
-    (window.screenY + webviewOffset.value.y);
-
+async function captureArea() {
+  const x = Math.min(start.value.x, current.value.x);
+  const y = Math.min(start.value.y, current.value.y);
   const width = Math.abs(start.value.x - current.value.x);
   const height = Math.abs(start.value.y - current.value.y);
 
-  return {
-    left: left + "px",
-    top: top + "px",
-    width: width + "px",
-    height: height + "px"
+  if (width < 5 || height < 5) return null;
+
+  const bytes = await window.api.captureArea({
+    x: Math.round(x),
+    y: Math.round(y),
+    width: Math.round(width),
+    height: Math.round(height)
+  });
+
+  const blob = new Blob([bytes], { type: "image/png" });
+  const url = URL.createObjectURL(blob);
+
+  preview.value = {
+    src: url,
+    x,
+    y,
+    w: width,
+    h: height
   };
-});
 
+  capturedRect.value = { x, y, width, height };
+  return blob;
+}
 
+/* =========================
+   Selection box rendering
+========================= */
+
+const selectionStyle = computed(() => ({
+  left: Math.min(start.value.x, current.value.x) - window.screenX + "px",
+  top: Math.min(start.value.y, current.value.y) - window.screenY + "px",
+  width: Math.abs(start.value.x - current.value.x) + "px",
+  height: Math.abs(start.value.y - current.value.y) + "px"
+}));
 </script>
 
 <template>
@@ -245,30 +193,19 @@ const selectionStyle = computed(() => {
     <div v-if="selecting" class="selection" :style="selectionStyle" />
   </div>
 
-  <!-- rendered text -->
-  <div v-for="(line, i) in lines" :key="i" class="overlay-text" @dblclick="dragMouseDown(i, $event)"
-         :style="{ left: line.x + 'px', top: line.y + 'px', width: line.w + 'px', height: line.h + 'px', position: 'absolute' }">
+  <!-- OCR text -->
+  <div v-for="(line, i) in lines" :key="i" class="overlay-text" @dblclick="dragMouseDown(i, $event)" :style="{
+    left: line.x + 'px',
+    top: line.y + 'px',
+    width: line.w + 'px',
+    height: line.h + 'px'
+  }">
+    <div class="data">{{ line.text }}</div>
+  </div>
 
-      <div class="data" v-html="line.text"
-           :style="{ cursor: line.dragging ? 'grabbing' : 'grab' }">
-      </div>
-
-    </div>
-
-  <!-- Render captured image EXACTLY on top -->
-  <!-- <img
-    v-if="preview"
-    :src="preview.src"
-    class="preview"
-    :style="{
-      left: preview.x + 'px',
-      top: preview.y + 'px',
-      width: preview.w + 'px',
-      height: preview.h + 'px'
-    }"
-  /> -->
+  <!-- Preview -->
   <div v-if="preview" class="preview">
-    <h3>Captured Preview:</h3>
+    <h3>Captured Preview</h3>
     <img :src="preview.src" />
   </div>
 </template>
@@ -301,11 +238,15 @@ const selectionStyle = computed(() => {
 
 .overlay-text {
   position: absolute;
-  font-size: 14px;
-  line-height: 20px;
-  color: red;
-  white-space: nowrap;
   pointer-events: none;
+  color: green;
+  font-family: monospace;
+}
+
+.data {
+  white-space: pre-wrap;
+  pointer-events: auto;
+  cursor: grab;
 }
 
 .preview {
@@ -323,28 +264,7 @@ const selectionStyle = computed(() => {
   max-height: 200px;
 }
 
-.text-overlay {
-  position: fixed;
-  background: transparent;
-  color: #fff;
-  font-size: 18px;
-  padding: 8px;
-  box-sizing: border-box;
-  z-index: 10002;
-  pointer-events: auto; /* must be clickable */
-  white-space: pre-wrap;
-}
-
-.data {
-  white-space: pre-wrap;   /* preserves \n and spaces */
-  font-family: monospace;
-  color: red;
-  pointer-events: auto; /* must be clickable */
-}
 body {
   -webkit-user-select: none;
-}
-.data {
-  -webkit-app-region: no-drag; /* allow clicks */
 }
 </style>

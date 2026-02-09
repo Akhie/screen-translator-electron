@@ -4,9 +4,7 @@
     <img :src="capture.image" class="thumb" />
 
     <div class="lines">
-      <OCRLine
-        :line="capture.lines"
-      />
+      <OCRLine :line="capture.lines" />
     </div>
 
     <div class="meta">

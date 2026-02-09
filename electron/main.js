@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, screen, globalShortcut, desktopCapturer  } = require("electron");
+const { app, BrowserWindow, ipcMain, screen, globalShortcut, desktopCapturer } = require("electron");
 const path = require("path");
 
 let win;
@@ -6,9 +6,9 @@ function createWindow() {
   win = new BrowserWindow({
     width: 1000,
     height: 700,
-     frame: false,
-     transparent: true,
-     alwaysOnTop: true,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
     },
@@ -19,11 +19,31 @@ function createWindow() {
   //win.loadFile(path.join(__dirname, "..", "dist", "index.html"));
   win.loadURL("http://localhost:5173");
   // Open DevTools (for renderer logs)
-   win.webContents.openDevTools();
+  win.webContents.openDevTools();
 }
 
 ipcMain.handle("hello", () => {
   return "Hello from Electron 👋";
+});
+
+ipcMain.handle("translate-text", async (event, text) => {
+  console.log("TEXT SEND : ", text);
+  const res = await fetch("https://libretranslate.de/translate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json; charset=UTF-8", "Accept": "application/json" },
+    body: JSON.stringify({ q: text, source: "ko", target: "en", format: "text" })
+  });
+
+  const translatedText = await res.text();
+  //console.log("RAW RESPONSE:", translatedText); // <--- shows what server actually returned
+
+  try {
+    const json = JSON.parse(translatedText);
+    return json;
+  } catch (e) {
+    console.error("Non-JSON response received, likely rate-limit or redirect");
+    return text; // fallback
+  }
 });
 
 ipcMain.handle("capture-area", async (event, { x, y, width, height }) => {

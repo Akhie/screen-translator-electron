@@ -8,6 +8,6 @@ export const historyStore = reactive({
     this.captures.unshift(capture);
   },
   clearCaptures() {
-     this.captures.length = 0;
+    this.captures.length = 0;
   },
 });

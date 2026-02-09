@@ -9,11 +9,7 @@
       No captures yet
     </div>
 
-    <CaptureCard
-      v-for="cap in history.captures"
-      :key="cap.id"
-      :capture="cap"
-    />
+    <CaptureCard v-for="cap in history.captures" :key="cap.id" :capture="cap" />
   </div>
 </template>
 
