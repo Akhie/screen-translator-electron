@@ -17,9 +17,9 @@ function createWindow() {
   win.maximize();
   console.log(__dirname);
   //win.loadFile(path.join(__dirname, "..", "dist", "index.html"));
-  win.loadURL("http://localhost:5173");
+  win.loadURL("http://localhost:8080");
   // Open DevTools (for renderer logs)
-  win.webContents.openDevTools();
+//  win.webContents.openDevTools();
 }
 
 ipcMain.handle("hello", () => {
@@ -27,23 +27,33 @@ ipcMain.handle("hello", () => {
 });
 
 ipcMain.handle("translate-text", async (event, text) => {
-  console.log("TEXT SEND : ", text);
-  const res = await fetch("https://libretranslate.de/translate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json; charset=UTF-8", "Accept": "application/json" },
-    body: JSON.stringify({ q: text, source: "ko", target: "en", format: "text" })
-  });
+  // translation api call and then return back the translated text
+  const url = "https://translation.googleapis.com/language/translate/v2?key=AIzaSyAF_X2CDKkk666sDyQOWtT1prycpWoijUU";
 
-  const translatedText = await res.text();
-  //console.log("RAW RESPONSE:", translatedText); // <--- shows what server actually returned
-
-  try {
-    const json = JSON.parse(translatedText);
-    return json;
-  } catch (e) {
-    console.error("Non-JSON response received, likely rate-limit or redirect");
-    return text; // fallback
-  }
+    const data = {
+      q: text,
+      target: "en",
+      source: "ko"
+    };
+    // ✅ Return the promise chain
+    return fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data)
+    })
+    .then(response => {
+        console.log("Response:", response);
+        if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+        return response.json(); // returns JSON
+    })
+    .then(result => {
+        console.log("Final result:", result);
+        return result; // this goes back to ipcRenderer.invoke
+    })
+    .catch(error => {
+        console.error("Error:", error);
+        return { error: error.message }; // fallback object
+    });
 });
 
 ipcMain.handle("capture-area", async (event, { x, y, width, height }) => {

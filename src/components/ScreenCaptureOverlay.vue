@@ -95,17 +95,61 @@ async function onMouseUp() {
 
   const data = await extractText(blob);
 
-  historyStore.addCapture({
-    id: crypto.randomUUID(),
-    timestamp: Date.now(),
-    image: preview.value.src,
-    lines: data
-  });
-  console.log("OCR TEXT : ", data.text);
-  const translated = await window.api.translate(data.text);
+  console.log("OCR TEXT : ", data);
+  const finalRenderingTranslation = await translatePreserveFormatting(data.text);
+  console.log('finalRenderingTranslation : ',finalRenderingTranslation);
+  addRenderLine(finalRenderingTranslation);
+}
 
-  console.log("Translation:", translated);
-  addRenderLine(data);
+/* =========================
+  Translate line by line
+========================= */
+
+async function translatePreserveFormatting(text) {
+    // Match lines INCLUDING their line breaks
+    const parts = text.match(/.*?(?:\r\n|\n|$)/g);
+
+    const translatedParts = await Promise.all(
+        parts.map(async (part) => {
+            // If this is purely a line break
+            if (/^(?:\r\n|\n)$/.test(part)) {
+                return part;
+            }
+
+            // Separate content from its line break
+            const match = part.match(/^(.*?)(\r\n|\n|$)$/);
+            const line = match[1];
+            const newline = match[2];
+
+            // Preserve empty / whitespace-only lines
+            if (/^\s*$/.test(line)) {
+                return line + newline;
+            }
+
+            // Capture leading + trailing whitespace
+            const wsMatch = line.match(/^(\s*)(.*?)(\s*)$/);
+            const leading = wsMatch[1];
+            const content = wsMatch[2];
+            const trailing = wsMatch[3];
+
+            const translatedData = await window.api.translate(content);
+            const translatedText = await translatedDataProcessing(translatedData);
+
+            return leading + translatedText + trailing + newline;
+        })
+    );
+
+    return translatedParts.join('');
+}
+
+
+
+/* =========================
+  Translated Data processing
+========================= */
+
+function translatedDataProcessing(translatedData) {
+    return translatedData?.data?.translations[0]?.translatedText;
 }
 
 /* =========================
@@ -114,7 +158,7 @@ async function onMouseUp() {
 
 async function extractText(blob) {
   const result = await Tesseract.recognize(blob, "eng+kor", {
-    logger: m => console.log(m)
+    logger: m => console.log(m),
   });
   return result.data;
 }
@@ -124,8 +168,16 @@ async function extractText(blob) {
 ========================= */
 
 function addRenderLine(data) {
+
+    historyStore.addCapture({
+        id: crypto.randomUUID(),
+        timestamp: Date.now(),
+        image: preview.value.src,
+        lines: data
+      });
+
   lines.value.push({
-    text: data.text,
+    text: data,
     x: preview.value.x,
     y: preview.value.y,
     w: preview.value.w,
@@ -188,8 +240,10 @@ const selectionStyle = computed(() => ({
     <button @click="uiStore.showHistory()">History</button>
   </div>
 
+
   <div class="overlay" :class="{ active: enabled }" @mousedown="onMouseDown" @mousemove="onMouseMove"
     @mouseup="onMouseUp">
+    <h1> This is the testing text </h1>
     <div v-if="selecting" class="selection" :style="selectionStyle" />
   </div>
 

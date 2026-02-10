@@ -1,7 +1,7 @@
 <!-- components/OCRLine.vue -->
 <template>
   <div class="ocr-line">
-    {{ line.text }}
+    {{ line }}
   </div>
 </template>
 
@@ -15,5 +15,6 @@ defineProps({ line: Object });
   background: rgba(255, 255, 0, 0.2);
   margin-bottom: 4px;
   white-space: pre-wrap;
+  line-height: inherit;
 }
 </style>
