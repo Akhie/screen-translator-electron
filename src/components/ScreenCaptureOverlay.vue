@@ -16,7 +16,7 @@ const capturedRect = ref(null);
 const lines = ref([]);
 
 /* =========================
-   Dragging OCR text
+   Dragging OCR text (Single Click Toggle)
 ========================= */
 
 let offsetX = 0;
@@ -24,10 +24,6 @@ let offsetY = 0;
 
 const dragMouseDown = (index, e) => {
   const line = lines.value[index];
-  line.dragging = true;
-
-  offsetX = e.clientX - line.x;
-  offsetY = e.clientY - line.y;
 
   const onMove = (e) => {
     if (!line.dragging) return;
@@ -36,14 +32,50 @@ const dragMouseDown = (index, e) => {
   };
 
   const onUp = () => {
-    line.dragging = false;
     document.removeEventListener("mousemove", onMove);
     document.removeEventListener("mouseup", onUp);
   };
 
+  // 1. If it is already dragging, we stop it (Inactive)
+  if (line.dragging) {
+    line.dragging = false;
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    return;
+  }
+
+  // 2. If it is not dragging, we start it (Active)
+  line.dragging = true;
+
+  // Calculate the offset so the box doesn't "jump" to the mouse cursor's top-left
+  offsetX = e.clientX - line.x;
+  offsetY = e.clientY - line.y;
+
   document.addEventListener("mousemove", onMove);
   document.addEventListener("mouseup", onUp);
 };
+
+/* ===============================
+  Start Automatic Text translation
+================================ */
+
+async function startTranslation() {
+  start.value = { x: 0, y: 0 };
+  current.value = { x: 1920, y: 1080 };
+  //capture the screen 
+  await nextTick();
+  const blob = await captureArea();
+  if (!blob) return;
+
+  const data = await extractText(blob);
+
+  console.log("OCR TEXT LIVE : ", data);
+  // translate it
+  const finalRenderingTranslation = await translatePreserveFormatting(data.text);
+  console.log('finalRenderingTranslation : ',finalRenderingTranslation);
+  // render it back
+  addRenderLine(finalRenderingTranslation);
+}
 
 /* =========================
    Controls
@@ -106,43 +138,131 @@ async function onMouseUp() {
 ========================= */
 
 async function translatePreserveFormatting(text) {
-    // Match lines INCLUDING their line breaks
-    const parts = text.match(/.*?(?:\r\n|\n|$)/g);
+    // 1. Parse the original text into parts to preserve structure
+    // We capture the line content AND the line break character
+    const parts = text.match(/.*?(?:\r\n|\n|$)/g) || [text];
 
-    const translatedParts = await Promise.all(
-        parts.map(async (part) => {
-            // If this is purely a line break
-            if (/^(?:\r\n|\n)$/.test(part)) {
-                return part;
+    // Map to objects so we can keep track of metadata (original content, whitespace, etc.)
+    const lineData = parts.map(part => {
+        // Check if it's purely a line break (empty line)
+        if (/^(?:\r\n|\n)$/.test(part)) {
+            return { type: 'break', content: part };
+        }
+
+        // Separate content from its line break
+        const match = part.match(/^(.*?)(\r\n|\n|$)$/);
+        const line = match[1];
+        const newline = match[2];
+
+        // Preserve empty / whitespace-only lines
+        if (/^\s*$/.test(line)) {
+            return { type: 'whitespace', content: line + newline };
+        }
+
+        // Capture leading + trailing whitespace for formatting
+        const wsMatch = line.match(/^(\s*)(.*?)(\s*)$/);
+        const leading = wsMatch[1];
+        const content = wsMatch[2]; // The actual text to translate
+        const trailing = wsMatch[3];
+
+        return { type: 'text', leading, content, trailing, newline };
+    });
+
+    // 2. Prepare the payload for the API
+    // Join all actual text content with a special delimiter (e.g., " ||| ")
+    // This allows us to split the result back into individual lines later.
+    const delimiter = " ||| ";
+    
+    const textToTranslate = lineData
+        .filter(item => item.type === 'text')
+        .map(item => item.content)
+        .join(delimiter);
+
+    // If there is nothing to translate, return original
+    if (!textToTranslate.trim()) return text;
+
+    // 3. Make the SINGLE API call
+    try {
+        const translatedData = await translate(textToTranslate);
+        const translatedText = translatedDataProcessing(translatedData);
+
+        // 4. Process the result
+        // Split the translated string back into an array using our delimiter
+        const translatedParts = translatedText.split(delimiter);
+
+        // 5. Reconstruct the final string preserving original formatting
+        let translatedIndex = 0;
+        const finalParts = lineData.map(item => {
+            if (item.type === 'break') {
+                return item.content; // Preserve empty lines
             }
-
-            // Separate content from its line break
-            const match = part.match(/^(.*?)(\r\n|\n|$)$/);
-            const line = match[1];
-            const newline = match[2];
-
-            // Preserve empty / whitespace-only lines
-            if (/^\s*$/.test(line)) {
-                return line + newline;
+            if (item.type === 'whitespace') {
+                return item.content; // Preserve whitespace lines
             }
+            if (item.type === 'text') {
+                // Get the corresponding translated part
+                const translated = translatedParts[translatedIndex] || ""; 
+                translatedIndex++;
+                
+                // Re-attach original leading/trailing whitespace and line breaks
+                return item.leading + translated + item.trailing + item.newline;
+            }
+            return "";
+        });
 
-            // Capture leading + trailing whitespace
-            const wsMatch = line.match(/^(\s*)(.*?)(\s*)$/);
-            const leading = wsMatch[1];
-            const content = wsMatch[2];
-            const trailing = wsMatch[3];
+        return finalParts.join('');
 
-            const translatedData = await window.api.translate(content);
-            const translatedText = await translatedDataProcessing(translatedData);
-
-            return leading + translatedText + trailing + newline;
-        })
-    );
-
-    return translatedParts.join('');
+    } catch (error) {
+        console.error("Translation failed:", error);
+        return text; // Fallback to original text on error
+    }
 }
 
+/* =========================
+  Translation
+========================= */
 
+function translate(text) {
+  var settings = {
+  url: "https://nsds-api.fabrix-s.samsungsds.com/sds/trial/api-chat/openapi/chat/v1/models",
+  method: "GET",
+  timeout: 0,
+  headers: {
+    "Content-Type": "application/json",
+    "x-fabrix-client": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJjbGllbnRJZCI6IjIyM2M3MGFkLWQwNTctNGQ4MC1iM2U4LTNlMzc3MDdkMWQwYy0xMDI5IiwiY2xpZW50U2VjcmV0IjoiUG1BUW92clI2NkJ3MThhODFSZDVMck9XZXRQbWxkbjciLCJleHAiOjE3NzI3MjI3OTl9.NCQHQWIhiw9azlz4JNGZgsW9llJYEDL3GgyIdxkDdXU",
+    "x-openapi-token": "Bearer eyJ4NXQiOiJNV0l5TkRJNVlqRTJaV1kxT0RNd01XSTNOR1ptTVRZeU5UTTJOVFZoWlRnMU5UTTNaVE5oTldKbVpERTFPVEE0TldFMVlUaGxNak5sTldFellqSXlZUSIsImtpZCI6Ik1XSXlOREk1WWpFMlpXWTFPRE13TVdJM05HWm1NVFl5TlRNMk5UVmhaVGcxTlRNM1pUTmhOV0ptWkRFMU9UQTROV0UxWVRobE1qTmxOV0V6WWpJeVlRX1JTMjU2IiwidHlwIjoiYXQrand0IiwiYWxnIjoiUlMyNTYifQ.eyJzdWIiOiI4NzdhNmMzNS04ZWU5LTQ1MGItODc1MS00N2MzMDUxMzQ5OTUiLCJhdXQiOiJBUFBMSUNBVElPTiIsImF1ZCI6IllVXzZkNGN1Wl9TSVRCc21FT1dGakJkMUZfb2EiLCJuYmYiOjE3NzAzNzcwMTMsImF6cCI6IllVXzZkNGN1Wl9TSVRCc21FT1dGakJkMUZfb2EiLCJzY29wZSI6ImRlZmF1bHQiLCJpc3MiOiJodHRwczpcL1wvbnNkcy13c28yLmZhYnJpeC1zLnNhbXN1bmdzZHMuY29tOjQ0M1wvb2F1dGgyXC90b2tlbiIsImV4cCI6NDkyNjEzNzAxMywiaWF0IjoxNzcwMzc3MDEzLCJqdGkiOiI3YzMyM2ExNi0wZDVjLTQ2OWUtOGM5My0yYjgwZTcxY2YyMjEiLCJjbGllbnRfaWQiOiJZVV82ZDRjdVpfU0lUQnNtRU9XRmpCZDFGX29hIn0.XZy-tWJtMPC1kvWkKYdOJvW4uSYUYTwEGON-Fk4X8eyufIMCoyHgGXU04zQfDt0uddRYJcD4CP1PTUb4pq5pIy9ptqc9mUGZMW8z1HHR8wAN-EZsQ2i23Qtvlu5zMOJ1cY-LQO02kF0sedrBRpYWT-R9V6Zq1b7Nt-zpj7jirf9ChFznk6cLHqyVw9x5EFJrL3lqc-3yFmAeC5lySVkjfUn959w5OBw6uzj7tC9SmWgtxmba5MkqSd-qBj9Fec7ocYXuJz4u8IcXtSgpBCmj8s6S2sRTnopwulOn8VZNhmyX6APhILLc16plwjlSJKVcrbviuYMFavYrHYL0CsSRUA",
+    "x-generative-ai-user-email": "davinder.s1@samsung.com",
+    "Cookie": "INGRESSCOOKIE=1770376705.393.78081.487324|b8d5e0e3856125cb64402f2f701e65a0"
+  },
+};
+  // translation api call and then return back the translated text
+  const url = "https://translation.googleapis.com/language/translate/v2?key=AIzaSyAF_X2CDKkk666sDyQOWtT1prycpWoijUU";
+
+    const data = {
+      q: text,
+      target: "en",
+      source: "ko"
+    };
+    // ✅ Return the promise chain
+    return fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data)
+    })
+    .then(response => {
+        console.log("Response:", response);
+        if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+        return response.json(); // returns JSON
+    })
+    .then(result => {
+        console.log("Final result:", result);
+        return result; // this goes back to ipcRenderer.invoke
+    })
+    .catch(error => {
+        console.error("Error:", error);
+        return { error: error.message }; // fallback object
+    });
+}
 
 /* =========================
   Translated Data processing
@@ -160,6 +280,7 @@ async function extractText(blob) {
   const result = await Tesseract.recognize(blob, "eng+kor", {
     logger: m => console.log(m),
   });
+  console.log("Extracted :", result);
   return result.data;
 }
 
@@ -234,7 +355,8 @@ const selectionStyle = computed(() => ({
 
 <template>
   <div class="controls">
-    <button @click="startSelection">Start</button>
+    <button @click="startTranslation">Start</button>
+    <button @click="startSelection">Select</button>
     <button @click="stopSelection">Stop</button>
     <button @click="refreshOverlay">Refresh</button>
     <button @click="uiStore.showHistory()">History</button>
@@ -243,12 +365,12 @@ const selectionStyle = computed(() => ({
 
   <div class="overlay" :class="{ active: enabled }" @mousedown="onMouseDown" @mousemove="onMouseMove"
     @mouseup="onMouseUp">
-    <h1> This is the testing text </h1>
+    <div style="pointer-events: auto;" id="overlay-layer"></div>
     <div v-if="selecting" class="selection" :style="selectionStyle" />
   </div>
 
   <!-- OCR text -->
-  <div v-for="(line, i) in lines" :key="i" class="overlay-text" @dblclick="dragMouseDown(i, $event)" :style="{
+  <div v-for="(line, i) in lines" :key="i" class="overlay-text" @click="dragMouseDown(i, $event)" :style="{
     left: line.x + 'px',
     top: line.y + 'px',
     width: line.w + 'px',
@@ -275,8 +397,14 @@ const selectionStyle = computed(() => ({
 .overlay {
   position: fixed;
   inset: 0;
-  pointer-events: none;
+  pointer-events: auto;
   z-index: 10000;
+}
+
+#overlay-layer {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.01);
 }
 
 .overlay.active {
@@ -295,6 +423,7 @@ const selectionStyle = computed(() => ({
   pointer-events: none;
   color: green;
   font-family: monospace;
+  z-index: 10001;
 }
 
 .data {
@@ -319,6 +448,6 @@ const selectionStyle = computed(() => ({
 }
 
 body {
-  -webkit-user-select: none;
+  user-select: text;
 }
 </style>
