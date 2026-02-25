@@ -88,12 +88,12 @@ ipcMain.handle("capture-area", async (event, { x, y, width, height }) => {
 
   // 2️⃣ Get the screen sources
   const sources = await desktopCapturer.getSources({
-    types: ["screen"],
+    types: ["window"],
     thumbnailSize: { width: primaryDisplay.size.width, height: primaryDisplay.size.height }
   });
 
-  // 3️⃣ Pick the first screen (main display)
-  const screenSource = sources[0];
+  // 3️⃣ Pick the behind screen (main display)
+  const screenSource = sources[1];
 
   // 4️⃣ Crop the area
   const image = screenSource.thumbnail.crop({ x, y, width, height });
@@ -110,6 +110,7 @@ app.whenReady().then(() => {
   // Register a global shortcut, e.g., Ctrl+Shift+S
   globalShortcut.register("Control+Shift+S", () => {
     if (win.isVisible()) {
+      win.webContents.send('stop-monitoring-request');
       win.hide(); // hide if already visible
     } else {
       win.show(); // show if hidden

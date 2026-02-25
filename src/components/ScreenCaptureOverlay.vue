@@ -1,85 +1,102 @@
 <script setup>
-import { ref, computed, onMounted, nextTick } from "vue";
-import Tesseract from "tesseract.js";
+// ============== Framework Imports ==============
+import { ref, computed, onUnmounted, nextTick } from "vue";
+
+// ============== Store Imports ==============
 import { historyStore } from "../store/history";
 import { uiStore } from "../store/ui";
 
+// ============== Composable Imports ==============
+// OCR & Translation
+import { extractText, parseHOCRtoBBoxes, parseTSVtoWords } from "../composables/useOCR.js";
+import { translateUsingFabrix } from "../composables/useTranslation.js";
+
+// Screen Capture & Positioning
+import { captureArea, createPreview, calculateCapturedRect } from "../composables/useScreenCapture.js";
+import { calculatePosition } from "../composables/useTextPosition.js";
+
+// Interactions & Monitoring
+import { useMonitoring } from "../composables/useMonitoring.js";
+import { useDraggable } from "../composables/useDraggable.js";
+
+// ==================== State ====================
+
 const enabled = ref(false);
 const selecting = ref(false);
+const showGuide = ref(false);
 
 const start = ref({ x: 0, y: 0 });
 const current = ref({ x: 0, y: 0 });
-
 const preview = ref(null);
 const capturedRect = ref(null);
-
 const lines = ref([]);
+const translationPosition = ref('right');
 
-/* =========================
-   Dragging OCR text (Single Click Toggle)
-========================= */
+// ==================== Rendering ====================
 
-let offsetX = 0;
-let offsetY = 0;
-
-const dragMouseDown = (index, e) => {
-  const line = lines.value[index];
-
-  const onMove = (e) => {
-    if (!line.dragging) return;
-    line.x = e.clientX - offsetX;
-    line.y = e.clientY - offsetY;
-  };
-
-  const onUp = () => {
-    document.removeEventListener("mousemove", onMove);
-    document.removeEventListener("mouseup", onUp);
-  };
-
-  // 1. If it is already dragging, we stop it (Inactive)
-  if (line.dragging) {
-    line.dragging = false;
-    document.removeEventListener("mousemove", onMove);
-    document.removeEventListener("mouseup", onUp);
-    return;
+function addRenderLines(lineDataArray, isMonitoringMode = false) {
+  if (!isMonitoringMode) {
+    historyStore.addCapture({
+      id: crypto.randomUUID(),
+      timestamp: Date.now(),
+      image: preview.value.src,
+      lines: lineDataArray
+    });
   }
 
-  // 2. If it is not dragging, we start it (Active)
-  line.dragging = true;
-
-  // Calculate the offset so the box doesn't "jump" to the mouse cursor's top-left
-  offsetX = e.clientX - line.x;
-  offsetY = e.clientY - line.y;
-
-  document.addEventListener("mousemove", onMove);
-  document.addEventListener("mouseup", onUp);
-};
-
-/* ===============================
-  Start Automatic Text translation
-================================ */
-
-async function startTranslation() {
-  start.value = { x: 0, y: 0 };
-  current.value = { x: 1920, y: 1080 };
-  //capture the screen 
-  await nextTick();
-  const blob = await captureArea();
-  if (!blob) return;
-
-  const data = await extractText(blob);
-
-  console.log("OCR TEXT LIVE : ", data);
-  // translate it
-  const finalRenderingTranslation = await translatePreserveFormatting(data.text);
-  console.log('finalRenderingTranslation : ',finalRenderingTranslation);
-  // render it back
-  addRenderLine(finalRenderingTranslation);
+  lineDataArray.forEach(lineData => {
+    const position = calculatePosition(lineData, translationPosition.value);
+    lines.value.push({
+      text: lineData.text,
+      x: position.x,
+      y: position.y,
+      w: position.w,
+      h: position.h,
+      dragging: false,
+      originalText: lineData.originalText || lineData.text,
+      originalX: lineData.originalX,
+      originalY: lineData.originalY,
+      originalW: lineData.originalW,
+      originalH: lineData.originalH
+    });
+  });
 }
 
-/* =========================
-   Controls
-========================= */
+// ==================== Composables ====================
+
+const { isMonitoring, startMonitoringLoop, stopMonitoringLoop, toggleMonitoring, resetMonitoring } = useMonitoring(
+  capturedRect,
+  start,
+  current,
+  preview,
+  lines,
+  addRenderLines
+);
+
+const { dragMouseDown } = useDraggable(lines);
+
+// ==================== Lifecycle ====================
+
+onUnmounted(() => {
+  stopMonitoringLoop();
+});
+
+// Listen for stop-monitoring request from main process
+window.api.on('stop-monitoring-request', () => {
+  if (isMonitoring.value) {
+    stopMonitoringLoop();
+  }
+});
+
+// ==================== Controls ====================
+
+function toggleSelection() {
+  if (enabled.value) {
+    stopSelection();
+  } else {
+    startSelection();
+  }
+}
 
 function startSelection() {
   enabled.value = true;
@@ -92,6 +109,7 @@ function stopSelection() {
 }
 
 function refreshOverlay() {
+  resetMonitoring();
   enabled.value = false;
   selecting.value = false;
   start.value = { x: 0, y: 0 };
@@ -101,9 +119,35 @@ function refreshOverlay() {
   lines.value = [];
 }
 
-/* =========================
-   Mouse (SCREEN COORDS ONLY)
-========================= */
+// ==================== Translation ====================
+
+async function processCapture() {
+  const blob = await captureArea(start.value, current.value);
+  if (!blob) return;
+
+  const data = await extractText(blob);
+  const parsedLines = parseTSVtoWords(data.tsv, preview.value.x, preview.value.y);
+  console.log("Sentence from OCR: ",parsedLines);
+  const delimiter = " ||| ";
+  const combinedText = parsedLines.map(line => line.text).join(delimiter);
+  console.log("Combined lines : ", combinedText);
+  const combinedTranslatedData = await translateUsingFabrix(combinedText);
+  const translatedParts = combinedTranslatedData.split(delimiter);
+  const translatedLines = parsedLines.map((line, index) => ({
+    ...line,
+    text: translatedParts[index] || line.text,
+    originalText: line.text,
+    originalX: line.x,
+    originalY: line.y,
+    originalW: line.w,
+    originalH: line.h
+  }));
+
+  //lines.value = [];
+  addRenderLines(translatedLines, false);
+}
+
+// ==================== Mouse Events ====================
 
 function onMouseDown(e) {
   if (!enabled.value) return;
@@ -122,228 +166,18 @@ async function onMouseUp() {
   selecting.value = false;
 
   await nextTick();
-  const blob = await captureArea();
+
+  const blob = await captureArea(start.value, current.value);
   if (!blob) return;
 
-  const data = await extractText(blob);
-
-  console.log("OCR TEXT : ", data);
-  const finalRenderingTranslation = await translatePreserveFormatting(data.text);
-  console.log('finalRenderingTranslation : ',finalRenderingTranslation);
-  addRenderLine(finalRenderingTranslation);
+  preview.value = createPreview(blob, start.value, current.value);
+  capturedRect.value = calculateCapturedRect(start.value, current.value);
+  enabled.value = false;
+  await processCapture();
+  
 }
 
-/* =========================
-  Translate line by line
-========================= */
-
-async function translatePreserveFormatting(text) {
-    // 1. Parse the original text into parts to preserve structure
-    // We capture the line content AND the line break character
-    const parts = text.match(/.*?(?:\r\n|\n|$)/g) || [text];
-
-    // Map to objects so we can keep track of metadata (original content, whitespace, etc.)
-    const lineData = parts.map(part => {
-        // Check if it's purely a line break (empty line)
-        if (/^(?:\r\n|\n)$/.test(part)) {
-            return { type: 'break', content: part };
-        }
-
-        // Separate content from its line break
-        const match = part.match(/^(.*?)(\r\n|\n|$)$/);
-        const line = match[1];
-        const newline = match[2];
-
-        // Preserve empty / whitespace-only lines
-        if (/^\s*$/.test(line)) {
-            return { type: 'whitespace', content: line + newline };
-        }
-
-        // Capture leading + trailing whitespace for formatting
-        const wsMatch = line.match(/^(\s*)(.*?)(\s*)$/);
-        const leading = wsMatch[1];
-        const content = wsMatch[2]; // The actual text to translate
-        const trailing = wsMatch[3];
-
-        return { type: 'text', leading, content, trailing, newline };
-    });
-
-    // 2. Prepare the payload for the API
-    // Join all actual text content with a special delimiter (e.g., " ||| ")
-    // This allows us to split the result back into individual lines later.
-    const delimiter = " ||| ";
-    
-    const textToTranslate = lineData
-        .filter(item => item.type === 'text')
-        .map(item => item.content)
-        .join(delimiter);
-
-    // If there is nothing to translate, return original
-    if (!textToTranslate.trim()) return text;
-
-    // 3. Make the SINGLE API call
-    try {
-        const translatedData = await translate(textToTranslate);
-        const translatedText = translatedDataProcessing(translatedData);
-
-        // 4. Process the result
-        // Split the translated string back into an array using our delimiter
-        const translatedParts = translatedText.split(delimiter);
-
-        // 5. Reconstruct the final string preserving original formatting
-        let translatedIndex = 0;
-        const finalParts = lineData.map(item => {
-            if (item.type === 'break') {
-                return item.content; // Preserve empty lines
-            }
-            if (item.type === 'whitespace') {
-                return item.content; // Preserve whitespace lines
-            }
-            if (item.type === 'text') {
-                // Get the corresponding translated part
-                const translated = translatedParts[translatedIndex] || ""; 
-                translatedIndex++;
-                
-                // Re-attach original leading/trailing whitespace and line breaks
-                return item.leading + translated + item.trailing + item.newline;
-            }
-            return "";
-        });
-
-        return finalParts.join('');
-
-    } catch (error) {
-        console.error("Translation failed:", error);
-        return text; // Fallback to original text on error
-    }
-}
-
-/* =========================
-  Translation
-========================= */
-
-function translate(text) {
-  var settings = {
-  url: "https://nsds-api.fabrix-s.samsungsds.com/sds/trial/api-chat/openapi/chat/v1/models",
-  method: "GET",
-  timeout: 0,
-  headers: {
-    "Content-Type": "application/json",
-    "x-fabrix-client": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJjbGllbnRJZCI6IjIyM2M3MGFkLWQwNTctNGQ4MC1iM2U4LTNlMzc3MDdkMWQwYy0xMDI5IiwiY2xpZW50U2VjcmV0IjoiUG1BUW92clI2NkJ3MThhODFSZDVMck9XZXRQbWxkbjciLCJleHAiOjE3NzI3MjI3OTl9.NCQHQWIhiw9azlz4JNGZgsW9llJYEDL3GgyIdxkDdXU",
-    "x-openapi-token": "Bearer eyJ4NXQiOiJNV0l5TkRJNVlqRTJaV1kxT0RNd01XSTNOR1ptTVRZeU5UTTJOVFZoWlRnMU5UTTNaVE5oTldKbVpERTFPVEE0TldFMVlUaGxNak5sTldFellqSXlZUSIsImtpZCI6Ik1XSXlOREk1WWpFMlpXWTFPRE13TVdJM05HWm1NVFl5TlRNMk5UVmhaVGcxTlRNM1pUTmhOV0ptWkRFMU9UQTROV0UxWVRobE1qTmxOV0V6WWpJeVlRX1JTMjU2IiwidHlwIjoiYXQrand0IiwiYWxnIjoiUlMyNTYifQ.eyJzdWIiOiI4NzdhNmMzNS04ZWU5LTQ1MGItODc1MS00N2MzMDUxMzQ5OTUiLCJhdXQiOiJBUFBMSUNBVElPTiIsImF1ZCI6IllVXzZkNGN1Wl9TSVRCc21FT1dGakJkMUZfb2EiLCJuYmYiOjE3NzAzNzcwMTMsImF6cCI6IllVXzZkNGN1Wl9TSVRCc21FT1dGakJkMUZfb2EiLCJzY29wZSI6ImRlZmF1bHQiLCJpc3MiOiJodHRwczpcL1wvbnNkcy13c28yLmZhYnJpeC1zLnNhbXN1bmdzZHMuY29tOjQ0M1wvb2F1dGgyXC90b2tlbiIsImV4cCI6NDkyNjEzNzAxMywiaWF0IjoxNzcwMzc3MDEzLCJqdGkiOiI3YzMyM2ExNi0wZDVjLTQ2OWUtOGM5My0yYjgwZTcxY2YyMjEiLCJjbGllbnRfaWQiOiJZVV82ZDRjdVpfU0lUQnNtRU9XRmpCZDFGX29hIn0.XZy-tWJtMPC1kvWkKYdOJvW4uSYUYTwEGON-Fk4X8eyufIMCoyHgGXU04zQfDt0uddRYJcD4CP1PTUb4pq5pIy9ptqc9mUGZMW8z1HHR8wAN-EZsQ2i23Qtvlu5zMOJ1cY-LQO02kF0sedrBRpYWT-R9V6Zq1b7Nt-zpj7jirf9ChFznk6cLHqyVw9x5EFJrL3lqc-3yFmAeC5lySVkjfUn959w5OBw6uzj7tC9SmWgtxmba5MkqSd-qBj9Fec7ocYXuJz4u8IcXtSgpBCmj8s6S2sRTnopwulOn8VZNhmyX6APhILLc16plwjlSJKVcrbviuYMFavYrHYL0CsSRUA",
-    "x-generative-ai-user-email": "davinder.s1@samsung.com",
-    "Cookie": "INGRESSCOOKIE=1770376705.393.78081.487324|b8d5e0e3856125cb64402f2f701e65a0"
-  },
-};
-  // translation api call and then return back the translated text
-  const url = "https://translation.googleapis.com/language/translate/v2?key=AIzaSyAF_X2CDKkk666sDyQOWtT1prycpWoijUU";
-
-    const data = {
-      q: text,
-      target: "en",
-      source: "ko"
-    };
-    // ✅ Return the promise chain
-    return fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data)
-    })
-    .then(response => {
-        console.log("Response:", response);
-        if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
-        return response.json(); // returns JSON
-    })
-    .then(result => {
-        console.log("Final result:", result);
-        return result; // this goes back to ipcRenderer.invoke
-    })
-    .catch(error => {
-        console.error("Error:", error);
-        return { error: error.message }; // fallback object
-    });
-}
-
-/* =========================
-  Translated Data processing
-========================= */
-
-function translatedDataProcessing(translatedData) {
-    return translatedData?.data?.translations[0]?.translatedText;
-}
-
-/* =========================
-   OCR
-========================= */
-
-async function extractText(blob) {
-  const result = await Tesseract.recognize(blob, "eng+kor", {
-    logger: m => console.log(m),
-  });
-  console.log("Extracted :", result);
-  return result.data;
-}
-
-/* =========================
-   Rendering OCR
-========================= */
-
-function addRenderLine(data) {
-
-    historyStore.addCapture({
-        id: crypto.randomUUID(),
-        timestamp: Date.now(),
-        image: preview.value.src,
-        lines: data
-      });
-
-  lines.value.push({
-    text: data,
-    x: preview.value.x,
-    y: preview.value.y,
-    w: preview.value.w,
-    h: preview.value.h,
-    dragging: false
-  });
-}
-
-/* =========================
-   Screen Capture (FIXED)
-========================= */
-
-async function captureArea() {
-  const x = Math.min(start.value.x, current.value.x);
-  const y = Math.min(start.value.y, current.value.y);
-  const width = Math.abs(start.value.x - current.value.x);
-  const height = Math.abs(start.value.y - current.value.y);
-
-  if (width < 5 || height < 5) return null;
-
-  const bytes = await window.api.captureArea({
-    x: Math.round(x),
-    y: Math.round(y),
-    width: Math.round(width),
-    height: Math.round(height)
-  });
-
-  const blob = new Blob([bytes], { type: "image/png" });
-  const url = URL.createObjectURL(blob);
-
-  preview.value = {
-    src: url,
-    x,
-    y,
-    w: width,
-    h: height
-  };
-
-  capturedRect.value = { x, y, width, height };
-  return blob;
-}
-
-/* =========================
-   Selection box rendering
-========================= */
+// ==================== Computed ====================
 
 const selectionStyle = computed(() => ({
   left: Math.min(start.value.x, current.value.x) - window.screenX + "px",
@@ -354,29 +188,54 @@ const selectionStyle = computed(() => ({
 </script>
 
 <template>
+  <!-- Controls (Bottom Right) -->
   <div class="controls">
-    <button @click="startTranslation">Start</button>
-    <button @click="startSelection">Select</button>
-    <button @click="stopSelection">Stop</button>
-    <button @click="refreshOverlay">Refresh</button>
-    <button @click="uiStore.showHistory()">History</button>
-  </div>
+    <!-- Position Selector -->
+    <div class="control-group">
+      <select id="position-select" v-model="translationPosition" title="Translation Position">
+        <option value="bottom">⬇ Bottom</option>
+        <option value="top">⬆ Top</option>
+        <option value="left">⬅ Left</option>
+        <option value="right">➡ Right</option>
+      </select>
+    </div>
 
+    <!-- Select/Stop Toggle -->
+    <button @click="toggleSelection" :class="{ active: enabled }" title="Select Area">
+      <span v-if="enabled">⏹ Stop</span>
+      <span v-else>⛶ Select</span>
+    </button>
+
+    <!-- Monitoring Toggle -->
+    <button @click="toggleMonitoring" :class="{ active: isMonitoring }" title="Live Monitoring">
+      <span v-if="isMonitoring">⏹ Monitor</span>
+      <span v-else>👁 Monitor</span>
+    </button>
+
+    <!-- Refresh -->
+    <button @click="refreshOverlay" title="Refresh">↻</button>
+
+    <!-- History -->
+    <button @click="uiStore.showHistory()" title="History">🗂</button>
+
+    <!-- Guide -->
+    <button @click="showGuide = true" class="guide-btn" title="Guide">?</button>
+  </div>
 
   <div class="overlay" :class="{ active: enabled }" @mousedown="onMouseDown" @mousemove="onMouseMove"
     @mouseup="onMouseUp">
-    <div style="pointer-events: auto;" id="overlay-layer"></div>
+    <div v-if="enabled" style="pointer-events: auto;" id="overlay-layer"></div>
     <div v-if="selecting" class="selection" :style="selectionStyle" />
   </div>
 
-  <!-- OCR text -->
+  <!-- Overlay Text (Static Styles) -->
   <div v-for="(line, i) in lines" :key="i" class="overlay-text" @click="dragMouseDown(i, $event)" :style="{
     left: line.x + 'px',
     top: line.y + 'px',
-    width: line.w + 'px',
+    width: 'fit-content',
     height: line.h + 'px'
   }">
-    <div class="data">{{ line.text }}</div>
+    <div class="data" :title="line.originalText">{{ line.text }}</div>
   </div>
 
   <!-- Preview -->
@@ -384,14 +243,122 @@ const selectionStyle = computed(() => ({
     <h3>Captured Preview</h3>
     <img :src="preview.src" />
   </div>
+
+  <!-- Guide Modal -->
+  <div v-if="showGuide" class="modal-backdrop" @click.self="showGuide = false">
+    <div class="modal-content">
+      <h2>📖 User Guide</h2>
+      <div class="guide-steps">
+        <div class="step">
+          <h3>1. Select Area</h3>
+          <p>Click <strong>"⛶ Select"</strong> and drag your mouse over the text you want to translate.</p>
+        </div>
+        <div class="step">
+          <h3>2. Choose Position</h3>
+          <p>Use the dropdown to decide where the translation appears.</p>
+        </div>
+        <div class="step highlight">
+          <h3>3. Live Monitoring</h3>
+          <p>Click <strong>"👁 Monitor"</strong> to watch the selected area. The app will automatically detect
+            changes and update the translation every 2 seconds.</p>
+        </div>
+        <div class="step">
+          <h3>4. Interact</h3>
+          <p><strong>Drag</strong> the translated text to move it around. Click <strong>"↻"</strong> to clear
+            everything.</p>
+        </div>
+      </div>
+      <button class="close-btn" @click="showGuide = false">Got it!</button>
+    </div>
+  </div>
 </template>
 
 <style>
+/* Controls - Bottom Right */
 .controls {
   position: fixed;
-  top: 10px;
-  left: 10px;
+  bottom: 20px;
+  right: 20px;
   z-index: 10001;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.95);
+  padding: 8px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  border: 1px solid #ddd;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.control-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.control-group select {
+  padding: 6px 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+  font-size: 13px;
+  min-width: 100px;
+}
+
+.control-group select:hover {
+  border-color: #00aaff;
+}
+
+.control-group select:focus {
+  outline: none;
+  border-color: #00aaff;
+  box-shadow: 0 0 5px rgba(0, 170, 255, 0.3);
+}
+
+.controls button {
+  padding: 8px 12px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+  font-size: 16px; /* Larger for icons */
+  line-height: 1;
+  min-width: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.controls button:hover {
+  background: #f0f0f0;
+  border-color: #00aaff;
+  transform: translateY(-1px);
+}
+
+.controls button:active {
+  transform: translateY(0);
+}
+
+.controls button.active {
+  background-color: #00aaff;
+  color: white;
+  border-color: #0088cc;
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.guide-btn {
+  background-color: #e3f2fd;
+  color: #0056b3;
+  font-weight: bold;
+  border-color: #90caf9;
+}
+
+.guide-btn:hover {
+  background-color: #bbdefb;
 }
 
 .overlay {
@@ -424,27 +391,112 @@ const selectionStyle = computed(() => ({
   color: green;
   font-family: monospace;
   z-index: 10001;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid #ccc;
+  padding: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .data {
   white-space: pre-wrap;
   pointer-events: auto;
   cursor: grab;
+  font-size: 12px;
+  line-height: 1.2;
 }
 
 .preview {
   position: fixed;
-  bottom: 10px;
-  left: 10px;
+  bottom: 20px;
+  left: 20px;
   z-index: 10002;
   background: white;
   padding: 10px;
   border: 1px solid #ccc;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
 }
 
 .preview img {
   max-width: 300px;
   max-height: 200px;
+  display: block;
+}
+
+/* Guide Modal Styles */
+.modal-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 20000;
+}
+
+.modal-content {
+  background: white;
+  padding: 25px;
+  border-radius: 8px;
+  width: 500px;
+  max-width: 90%;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+}
+
+.modal-content h2 {
+  margin-top: 0;
+  color: #333;
+  border-bottom: 2px solid #00aaff;
+  padding-bottom: 10px;
+}
+
+.guide-steps {
+  margin-bottom: 20px;
+}
+
+.step {
+  margin-bottom: 15px;
+}
+
+.step h3 {
+  margin: 0 0 5px 0;
+  font-size: 16px;
+  color: #0056b3;
+}
+
+.step p {
+  margin: 0;
+  font-size: 14px;
+  color: #555;
+  line-height: 1.4;
+}
+
+.step.highlight {
+  background-color: #fff3cd;
+  padding: 10px;
+  border-radius: 4px;
+  border-left: 4px solid #ffc107;
+}
+
+.close-btn {
+  width: 100%;
+  padding: 10px;
+  background-color: #00aaff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 16px;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+.close-btn:hover {
+  background-color: #0088cc;
 }
 
 body {
