@@ -9,5 +9,6 @@ export const historyStore = reactive({
   },
   clearCaptures() {
     this.captures.length = 0;
+    document.getElementById('capture-list').innerHTML = ""; // Clear DOM too
   },
 });

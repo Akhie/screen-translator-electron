@@ -16,7 +16,7 @@ const fabrixTranlateUrl = "/api/sds/trial/api-chat/openapi/chat/v1/messages";
  * @param {string} target - Target language (default: "english")
  * @returns {Promise<string>} Translated text
  */
-export async function translateUsingFabrix(text, source = "korean", target = "hindi") {
+export async function translateUsingFabrix(text, source = "korean", target = "english") {
   const startTime = Date.now();
   const response = await fetch(fabrixTranlateUrl, {
     method: "POST",

@@ -31,6 +31,7 @@ const preview = ref(null);
 const capturedRect = ref(null);
 const lines = ref([]);
 const translationPosition = ref('right');
+const targetLang = ref('english');
 
 // ==================== Rendering ====================
 
@@ -131,7 +132,7 @@ async function processCapture() {
   const delimiter = " ||| ";
   const combinedText = parsedLines.map(line => line.text).join(delimiter);
   console.log("Combined lines : ", combinedText);
-  const combinedTranslatedData = await translateUsingFabrix(combinedText);
+  const combinedTranslatedData = await translateUsingFabrix(combinedText, null, targetLang.value );
   const translatedParts = combinedTranslatedData.split(delimiter);
   const translatedLines = parsedLines.map((line, index) => ({
     ...line,
@@ -192,34 +193,62 @@ const selectionStyle = computed(() => ({
   <div class="controls">
     <!-- Position Selector -->
     <div class="control-group">
-      <select id="position-select" v-model="translationPosition" title="Translation Position">
-        <option value="bottom">⬇ Bottom</option>
-        <option value="top">⬆ Top</option>
-        <option value="left">⬅ Left</option>
-        <option value="right">➡ Right</option>
+      <select id="lang-select" v-model="targetLang" title="Target Language">
+        <option value="english">English</option>
+        <option value="korean">Korean</option>
       </select>
     </div>
 
     <!-- Select/Stop Toggle -->
-    <button @click="toggleSelection" :class="{ active: enabled }" title="Select Area">
-      <span v-if="enabled">⏹ Stop</span>
-      <span v-else>⛶ Select</span>
+    <button @click="toggleSelection" :class="{ active: enabled }" title="Select Area" class="icon-btn">
+      <!-- Scissors Icon (Always shown now for consistency) -->
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="6" cy="6" r="3"></circle>
+        <circle cx="6" cy="18" r="3"></circle>
+        <line x1="20" y1="4" x2="8.12" y2="15.88"></line>
+        <line x1="14.47" y1="14.48" x2="20" y2="20"></line>
+        <line x1="8.12" y1="8.12" x2="12" y2="12"></line>
+      </svg>
     </button>
 
     <!-- Monitoring Toggle -->
-    <button @click="toggleMonitoring" :class="{ active: isMonitoring }" title="Live Monitoring">
-      <span v-if="isMonitoring">⏹ Monitor</span>
-      <span v-else>👁 Monitor</span>
+    <button @click="toggleMonitoring" :class="{ active: isMonitoring }" title="Live Monitoring" class="icon-btn">
+      <svg v-if="!isMonitoring" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+        <circle cx="12" cy="12" r="3"></circle>
+      </svg>
+      <svg v-else width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+        <line x1="1" y1="1" x2="23" y2="23"></line>
+      </svg>
     </button>
 
     <!-- Refresh -->
-    <button @click="refreshOverlay" title="Refresh">↻</button>
+    <button @click="refreshOverlay" title="Refresh" class="icon-btn">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M23 4v6h-6"></path>
+        <path d="M1 20v-6h6"></path>
+        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+      </svg>
+    </button>
 
-    <!-- History -->
-    <button @click="uiStore.showHistory()" title="History">🗂</button>
+    <!-- History (New Icon) -->
+    <button @click="uiStore.showHistory()" title="History" class="icon-btn">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 3v5h5"></path>
+        <path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"></path>
+        <path d="M12 7v5l4 2"></path>
+      </svg>
+    </button>
 
     <!-- Guide -->
-    <button @click="showGuide = true" class="guide-btn" title="Guide">?</button>
+    <button @click="showGuide = true" class="guide-btn icon-btn" title="Guide">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"></circle>
+        <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+        <line x1="12" y1="17" x2="12.01" y2="17"></line>
+      </svg>
+    </button>
   </div>
 
   <div class="overlay" :class="{ active: enabled }" @mousedown="onMouseDown" @mousemove="onMouseMove"
@@ -228,12 +257,11 @@ const selectionStyle = computed(() => ({
     <div v-if="selecting" class="selection" :style="selectionStyle" />
   </div>
 
-  <!-- Overlay Text (Static Styles) -->
+  <!-- Overlay Text -->
   <div v-for="(line, i) in lines" :key="i" class="overlay-text" @click="dragMouseDown(i, $event)" :style="{
     left: line.x + 'px',
     top: line.y + 'px',
     width: 'fit-content',
-    height: line.h + 'px'
   }">
     <div class="data" :title="line.originalText">{{ line.text }}</div>
   </div>
@@ -251,7 +279,7 @@ const selectionStyle = computed(() => ({
       <div class="guide-steps">
         <div class="step">
           <h3>1. Select Area</h3>
-          <p>Click <strong>"⛶ Select"</strong> and drag your mouse over the text you want to translate.</p>
+          <p>Click <strong>"Select"</strong> and drag your mouse over the text you want to translate.</p>
         </div>
         <div class="step">
           <h3>2. Choose Position</h3>
@@ -259,12 +287,12 @@ const selectionStyle = computed(() => ({
         </div>
         <div class="step highlight">
           <h3>3. Live Monitoring</h3>
-          <p>Click <strong>"👁 Monitor"</strong> to watch the selected area. The app will automatically detect
+          <p>Click <strong>"Monitor"</strong> to watch the selected area. The app will automatically detect
             changes and update the translation every 2 seconds.</p>
         </div>
         <div class="step">
           <h3>4. Interact</h3>
-          <p><strong>Drag</strong> the translated text to move it around. Click <strong>"↻"</strong> to clear
+          <p><strong>Drag</strong> the translated text to move it around. Click <strong>"Refresh"</strong> to clear
             everything.</p>
         </div>
       </div>
@@ -274,7 +302,13 @@ const selectionStyle = computed(() => ({
 </template>
 
 <style>
-/* Controls - Bottom Right */
+/* Global Font Settings */
+body {
+  user-select: text;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* Controls - Bottom Right (Glassmorphism Style) */
 .controls {
   position: fixed;
   bottom: 20px;
@@ -282,12 +316,15 @@ const selectionStyle = computed(() => ({
   z-index: 10001;
   display: flex;
   align-items: center;
-  gap: 8px;
-  background: rgba(255, 255, 255, 0.95);
-  padding: 8px;
-  border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  border: 1px solid #ddd;
+  gap: 10px;
+  background: rgba(30, 41, 59, 0.85); /* Dark Slate Blue with opacity */
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  color: #f8fafc;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
@@ -299,66 +336,74 @@ const selectionStyle = computed(() => ({
 }
 
 .control-group select {
-  padding: 6px 10px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  background: white;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.8);
+  color: #f1f5f9;
+  border: 1px solid rgba(255, 255, 255, 0.2);
   cursor: pointer;
   font-size: 13px;
-  min-width: 100px;
+  min-width: 110px;
+  outline: none;
+  transition: all 0.2s;
 }
 
 .control-group select:hover {
-  border-color: #00aaff;
+  border-color: rgba(255, 255, 255, 0.4);
 }
 
 .control-group select:focus {
-  outline: none;
-  border-color: #00aaff;
-  box-shadow: 0 0 5px rgba(0, 170, 255, 0.3);
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3);
 }
 
-.controls button {
-  padding: 8px 12px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  background: white;
+.control-group option {
+  background: #0f172a;
+  color: #fff;
+}
+
+.icon-btn {
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #cbd5e1;
   cursor: pointer;
-  font-size: 16px; /* Larger for icons */
-  line-height: 1;
-  min-width: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: all 0.2s ease;
+  min-width: 36px;
+  height: 36px;
 }
 
-.controls button:hover {
-  background: #f0f0f0;
-  border-color: #00aaff;
+.icon-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
   transform: translateY(-1px);
+  border-color: rgba(255, 255, 255, 0.3);
 }
 
-.controls button:active {
+.icon-btn:active {
   transform: translateY(0);
 }
 
-.controls button.active {
-  background-color: #00aaff;
+.icon-btn.active {
+  background-color: #3b82f6; /* Blue-500 */
   color: white;
-  border-color: #0088cc;
-  box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
+  border-color: #3b82f6;
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
 }
 
 .guide-btn {
-  background-color: #e3f2fd;
-  color: #0056b3;
-  font-weight: bold;
-  border-color: #90caf9;
+  background-color: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+  border-color: rgba(59, 130, 246, 0.4);
 }
 
 .guide-btn:hover {
-  background-color: #bbdefb;
+  background-color: rgba(59, 130, 246, 0.4);
+  color: #fff;
 }
 
 .overlay {
@@ -381,30 +426,46 @@ const selectionStyle = computed(() => ({
 
 .selection {
   position: absolute;
-  border: 2px dashed #00aaff;
-  background: rgba(0, 170, 255, 0.25);
+  border: 2px dashed #3b82f6; /* Blue-500 */
+  background: rgba(59, 130, 246, 0.2);
+  box-shadow: 0 0 15px rgba(59, 130, 246, 0.3);
 }
 
+/* UPDATED: Overlay Text Style to match Google Lens */
 .overlay-text {
   position: absolute;
   pointer-events: none;
-  color: green;
-  font-family: monospace;
   z-index: 10001;
-  background: rgba(255, 255, 255, 0.8);
-  border: 1px solid #ccc;
-  padding: 2px;
+  
+  /* Google Lens Aesthetic */
+  background-color: #ffffff;
+  opacity: 0.7;
+  /* color: #202124; */
+  color: green;
+  padding: 4px 4px;
+  border-radius: 8px;
+  
+  /* Border & Shadow */
+  border: 1px solid #dadce0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.24);
+  
+  /* Font */
+  font-size: 14px;
+  
+  /* Layout */
+  white-space: pre-wrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  
+  /* Smooth appearance */
+  transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
 .data {
   white-space: pre-wrap;
   pointer-events: auto;
   cursor: grab;
-  font-size: 12px;
-  line-height: 1.2;
+  display: block;
 }
 
 .preview {
@@ -412,17 +473,41 @@ const selectionStyle = computed(() => ({
   bottom: 20px;
   left: 20px;
   z-index: 10002;
-  background: white;
-  padding: 10px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  background: rgba(30, 41, 59, 0.9);
+  backdrop-filter: blur(10px);
+  padding: 15px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+  /* Size Constraints */
+  width: 200px;
+  height: 200px;
+  box-sizing: border-box;
+}
+
+.preview h3 {
+  margin: 0 0 10px 0;
+  font-size: 14px;
+  color: #94a3b8;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  width: 100%;
+  text-align: center;
+  flex-shrink: 0; /* Prevent header from shrinking */
 }
 
 .preview img {
-  max-width: 300px;
-  max-height: 200px;
+  width: 100%;
+  height: 145px;
+  object-fit: contain; /* Ensures image fits within 400x400 without cropping */
   display: block;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(0,0,0,0.2);
 }
 
 /* Guide Modal Styles */
@@ -432,7 +517,8 @@ const selectionStyle = computed(() => ({
   left: 0;
   width: 100%;
   height: 100%;
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(5px);
   display: flex;
   justify-content: center;
   align-items: center;
@@ -440,66 +526,76 @@ const selectionStyle = computed(() => ({
 }
 
 .modal-content {
-  background: white;
-  padding: 25px;
-  border-radius: 8px;
+  background: #1e293b; /* Dark Slate */
+  padding: 30px;
+  border-radius: 16px;
   width: 500px;
   max-width: 90%;
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #f1f5f9;
+  animation: zoomIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+@keyframes zoomIn {
+  from { transform: scale(0.9); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
 }
 
 .modal-content h2 {
   margin-top: 0;
-  color: #333;
-  border-bottom: 2px solid #00aaff;
-  padding-bottom: 10px;
+  color: #fff;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 15px;
+  font-size: 20px;
 }
 
 .guide-steps {
-  margin-bottom: 20px;
+  margin-bottom: 25px;
 }
 
 .step {
-  margin-bottom: 15px;
+  margin-bottom: 20px;
 }
 
 .step h3 {
-  margin: 0 0 5px 0;
+  margin: 0 0 8px 0;
   font-size: 16px;
-  color: #0056b3;
+  color: #60a5fa; /* Blue-400 */
 }
 
 .step p {
   margin: 0;
   font-size: 14px;
-  color: #555;
-  line-height: 1.4;
+  color: #cbd5e1;
+  line-height: 1.5;
 }
 
 .step.highlight {
-  background-color: #fff3cd;
-  padding: 10px;
-  border-radius: 4px;
-  border-left: 4px solid #ffc107;
+  background: rgba(234, 179, 8, 0.1); /* Yellow tint */
+  padding: 12px;
+  border-radius: 8px;
+  border-left: 4px solid #eab308; /* Yellow-500 */
+}
+
+.step.highlight h3 {
+  color: #facc15; /* Yellow-400 */
 }
 
 .close-btn {
   width: 100%;
-  padding: 10px;
-  background-color: #00aaff;
+  padding: 12px;
+  background-color: #3b82f6;
   color: white;
   border: none;
-  border-radius: 4px;
+  border-radius: 8px;
   font-size: 16px;
   cursor: pointer;
-  font-weight: bold;
+  font-weight: 600;
+  transition: background 0.2s;
 }
 
 .close-btn:hover {
-  background-color: #0088cc;
-}
-
-body {
-  user-select: text;
+  background-color: #2563eb;
 }
 </style>

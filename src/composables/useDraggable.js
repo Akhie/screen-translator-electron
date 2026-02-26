@@ -13,6 +13,8 @@ export function useDraggable(lines) {
    * @param {Event} e - Mouse event
    */
   function dragMouseDown(index, e) {
+    e.preventDefault(); // Prevents text selection during drag
+    
     const line = lines.value[index];
     const onMove = (moveEvent) => {
       if (!line.dragging) return;
@@ -34,8 +36,10 @@ export function useDraggable(lines) {
     line.dragging = true;
     offsetX = e.clientX - line.x;
     offsetY = e.clientY - line.y;
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
+    
+    // Added { passive: false } to help with smoothness on high-refresh screens
+    document.addEventListener("mousemove", onMove, { passive: false });
+    document.addEventListener("mouseup", onUp, { passive: false });
   }
 
   return { dragMouseDown };
