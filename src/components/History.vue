@@ -1,6 +1,9 @@
 <!-- pages/History.vue -->
 <template>
   <div class="history-page">
+    <!-- Transversal Loader -->
+    <Loader />
+
     <!-- Modern Minimize Button -->
     <div class="minimize-button" title="Minimize">
       <button @click="uiStore.showOverlay()">
@@ -75,6 +78,7 @@
 import { historyStore as history } from "../store/history";
 import { uiStore } from '../store/ui'
 import CaptureCard from "../components/CaptureCard.vue";
+import Loader from "../components/Loader.vue";
 import { reactive } from "vue";
 
 const captureActive = reactive({ id: 0, capture: null });
@@ -142,9 +146,8 @@ const clearAll = () => {
   backdrop-filter: blur(10px);
   color: white;
   border: 1px solid rgba(255, 255, 255, 0.2);
-  padding: 8px 12px;
   cursor: pointer;
-  border-radius: 50%; /* Circular button */
+  border-radius: 15%;
   transition: all 0.3s ease;
   display: flex;
   align-items: center;

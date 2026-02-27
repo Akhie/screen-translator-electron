@@ -2,6 +2,7 @@ import { ref } from 'vue';
 import { extractText, parseHOCRtoBBoxes } from './useOCR.js';
 import { translateLines } from './useTranslation.js';
 import { captureArea, calculateCapturedRect, createPreview } from './useScreenCapture.js';
+import { uiStore } from '../store/ui';
 
 const POLLING_RATE_MS = 2000;
 
@@ -46,6 +47,7 @@ export function useMonitoring(capturedRect, start, current, preview, lines, addR
       clearInterval(monitoringInterval);
       monitoringInterval = null;
     }
+    uiStore.clearLoading();
     console.log("⏹️ Monitoring stopped.");
   }
 
@@ -76,6 +78,8 @@ export function useMonitoring(capturedRect, start, current, preview, lines, addR
 
     try {
       // Capture area
+      uiStore.setLoading('capturing', 'Capturing screen area...');
+
       const tempStart = { ...start.value };
       const tempCurrent = { ...current.value };
 
@@ -91,32 +95,44 @@ export function useMonitoring(capturedRect, start, current, preview, lines, addR
       start.value = tempStart;
       current.value = tempCurrent;
 
-      if (!blob) return;
+      if (!blob) {
+        // Don't clear loading on monitoring - keep it visible
+        await new Promise(resolve => setTimeout(resolve, 500));
+        return;
+      }
 
       // Update preview with the latest capture
-      preview.value = createPreview(blob, capturedRect.value, { 
-        x: capturedRect.value.x + capturedRect.value.width, 
-        y: capturedRect.value.y + capturedRect.value.height 
+      preview.value = createPreview(blob, capturedRect.value, {
+        x: capturedRect.value.x + capturedRect.value.width,
+        y: capturedRect.value.y + capturedRect.value.height
       });
 
       // Process text
+      uiStore.setLoading('ocr', 'Extracting text...');
+
       const data = await extractText(blob);
       const parsedLines = parseHOCRtoBBoxes(data.hocr, capturedRect.value.x, capturedRect.value.y);
 
       // Filter out translated lines
       const filteredParsedLines = parsedLines.filter(ocrLine => {
         const isTranslatedLine = lines.value.some(translatedLine => {
-          const posMatch = Math.abs(ocrLine.x - translatedLine.x) < 10 && 
+          const posMatch = Math.abs(ocrLine.x - translatedLine.x) < 10 &&
                           Math.abs(ocrLine.y - translatedLine.y) < 10;
           return posMatch;
         });
         return !isTranslatedLine;
       });
 
-      if (filteredParsedLines.length === 0) return;
+      if (filteredParsedLines.length === 0) {
+        // Don't clear loading on monitoring - keep it visible for next cycle
+        await new Promise(resolve => setTimeout(resolve, 500));
+        return;
+      }
 
       // Check for 90%+ change
       if (previousLinesData.length > 0 && !hasSignificantChange(filteredParsedLines, previousLinesData)) {
+        // Don't clear loading on monitoring - keep it visible for next cycle
+        await new Promise(resolve => setTimeout(resolve, 500));
         return;
       }
 
@@ -126,15 +142,23 @@ export function useMonitoring(capturedRect, start, current, preview, lines, addR
       previousLinesData = [];
       lines.value = [];
 
+      uiStore.setLoading('translation', 'Translating text...');
+
       const translatedLines = await translateLines(filteredParsedLines);
 
       // Update previousLinesData for next comparison
       previousLinesData = filteredParsedLines.map(line => ({ ...line }));
 
+      // Don't clear loading during monitoring - the next cycle will update the step
       addRenderLines(translatedLines, true); // true = monitoring mode
+
+      // Small delay before next cycle to show completion
+      await new Promise(resolve => setTimeout(resolve, 300));
 
     } catch (error) {
       console.error("Error updating live translation:", error);
+      uiStore.clearLoading();
+      await new Promise(resolve => setTimeout(resolve, 500));
     } finally {
       isProcessing = false;
     }

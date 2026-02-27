@@ -6,6 +6,9 @@ import { ref, computed, onUnmounted, nextTick } from "vue";
 import { historyStore } from "../store/history";
 import { uiStore } from "../store/ui";
 
+// ============== Component Imports ==============
+import Loader from "./Loader.vue";
+
 // ============== Composable Imports ==============
 // OCR & Translation
 import { extractText, parseHOCRtoBBoxes, parseTSVtoWords } from "../composables/useOCR.js";
@@ -122,31 +125,59 @@ function refreshOverlay() {
 
 // ==================== Translation ====================
 
+// ==================== Translation ====================
+
 async function processCapture() {
+  uiStore.setLoading('capturing', 'Capturing screen area...');
   const blob = await captureArea(start.value, current.value);
   if (!blob) return;
 
+  uiStore.setLoading('ocr', 'Extracting text...');
   const data = await extractText(blob);
-  const parsedLines = parseTSVtoWords(data.tsv, preview.value.x, preview.value.y);
-  console.log("Sentence from OCR: ",parsedLines);
-  const delimiter = " ||| ";
-  const combinedText = parsedLines.map(line => line.text).join(delimiter);
-  console.log("Combined lines : ", combinedText);
-  const combinedTranslatedData = await translateUsingFabrix(combinedText, null, targetLang.value );
-  const translatedParts = combinedTranslatedData.split(delimiter);
-  const translatedLines = parsedLines.map((line, index) => ({
-    ...line,
-    text: translatedParts[index] || line.text,
-    originalText: line.text,
-    originalX: line.x,
-    originalY: line.y,
-    originalW: line.w,
-    originalH: line.h
-  }));
 
-  //lines.value = [];
+  const parsedLines = parseTSVtoWords(data.tsv, preview.value.x, preview.value.y);
+  console.log("Sentence from OCR: ", parsedLines);
+
+  const delimiter = " ||| ";
+
+  // 1. Add line counts (e.g., "1: ", "2: ") to each line before joining
+  const linesWithCounts = parsedLines.map((line, index) => `${index + 1}: ${line.text}`);
+  
+  // 2. Join the modified lines to send to Fabrix
+  const combinedText = linesWithCounts.join(delimiter);
+  console.log("Combined lines with counts: ", combinedText);
+
+  uiStore.setLoading('translation', 'Translating text...');
+
+  // 3. Pass the data to Fabrix
+  const combinedTranslatedData = await translateUsingFabrix(combinedText, null, targetLang.value);
+
+  // 4. Split the translated data back using the delimiter
+  const translatedParts = combinedTranslatedData.split(delimiter);
+
+  // 5. Remove the line counts from the translated text using a Regex
+  // This regex looks for "Number: " at the start of the string and removes it
+  const translatedLines = parsedLines.map((line, index) => {
+    const rawTranslation = translatedParts[index] || line.text;
+    const cleanTranslation = rawTranslation.replace(/^\d+:\s*/, ''); 
+
+    return {
+      ...line,
+      text: cleanTranslation,
+      originalText: line.text,
+      originalX: line.x,
+      originalY: line.y,
+      originalW: line.w,
+      originalH: line.h
+    };
+  });
+
+  uiStore.clearLoading();
+
+  // lines.value = []; // commented out in your original code
   addRenderLines(translatedLines, false);
 }
+
 
 // ==================== Mouse Events ====================
 
@@ -189,6 +220,9 @@ const selectionStyle = computed(() => ({
 </script>
 
 <template>
+  <!-- Transversal Loader -->
+  <Loader />
+
   <!-- Controls (Bottom Right) -->
   <div class="controls">
     <!-- Position Selector -->
@@ -439,9 +473,9 @@ body {
   
   /* Google Lens Aesthetic */
   background-color: #ffffff;
-  opacity: 0.7;
+  opacity: 0.8;
   /* color: #202124; */
-  color: green;
+  color: blue;
   padding: 4px 4px;
   border-radius: 8px;
   
@@ -450,7 +484,7 @@ body {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.24);
   
   /* Font */
-  font-size: 14px;
+  font-size: 11px;
   
   /* Layout */
   white-space: pre-wrap;
