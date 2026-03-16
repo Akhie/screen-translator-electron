@@ -27,7 +27,7 @@ function measureTextDimensions(text) {
 export function calculatePosition(line, position) {
   const offset = 5;
   // Adjustment to align visual baseline (moves text up)
-  const VERTICAL_ADJUSTMENT = -20; 
+  const VERTICAL_ADJUSTMENT = -10; 
   
   let finalPosition = position;
 
