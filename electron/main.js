@@ -16,8 +16,8 @@ function createWindow() {
 
   win.maximize();
   console.log(__dirname);
-  //win.loadFile(path.join(__dirname, "..", "dist", "index.html"));
-  win.loadURL("http://localhost:8080");
+  win.loadFile(path.join(__dirname, "..", "dist", "index.html"));
+  //win.loadURL("http://localhost:8080");
   // Open DevTools (for renderer logs)
 //  win.webContents.openDevTools();
 }
@@ -102,7 +102,12 @@ ipcMain.handle("capture-area", async (event, { x, y, width, height }) => {
   return image.toPNG(); // Uint8Array / Buffer
 });
 
+ipcMain.on("set-ignore-mouse", (event, ignore) => {
+  console.log("Igrnore : ",ignore);
+    win.setIgnoreMouseEvents(ignore, { forward: true });
+});
 
+app.disableHardwareAcceleration();
 
 app.whenReady().then(() => {
   createWindow();
