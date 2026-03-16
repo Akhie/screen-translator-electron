@@ -4,10 +4,11 @@
   "version": "0.0.0",
   "main": "electron/main.js",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --port 8080",
     "build": "vite build",
     "preview": "vite preview",
-    "electron": "electron ."
+    "electron": "electron .",
+    "start": "concurrently \"npm run dev\" \"npm run electron\""
   },
   "dependencies": {
     "tesseract.js": "^7.0.0",
@@ -15,6 +16,7 @@
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.1",
+    "concurrently": "^9.2.1",
     "electron": "^40.2.1",
     "vite": "^7.2.4"
   }
